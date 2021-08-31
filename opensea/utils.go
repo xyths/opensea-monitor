@@ -2,20 +2,22 @@ package opensea
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 	"github.com/xyths/hs/convert"
-	"math"
 	"time"
 )
 
 func toRecord(ae AssetEvent) Record {
 	r := Record{
-		Collection: ae.Asset.Collection.Name,
-		Name:       ae.Asset.Name,
-		Id:         ae.Asset.TokenId,
-		From:       toName(ae.FromAccount),
-		Date:       toBeijingTime(ae.CreatedDate),
-		CreatedAt:  time.Now(),
+		Collection:      ae.Asset.Collection.Name,
+		Contract:        common.HexToAddress(ae.Asset.AssetContract.Address).Hex(),
+		Name:            ae.Asset.Name,
+		Id:              ae.Asset.TokenId,
+		From:            toName(ae.FromAccount),
+		Date:            toBeijingTime(ae.CreatedDate),
+		CreatedAt:       time.Now(),
+		ImagePreviewUrl: ae.Asset.ImagePreviewUrl,
 	}
 	switch ae.EventType {
 	case EventTypeTransfer:
@@ -65,16 +67,16 @@ func toBeijingTime(date string) string {
 	if err != nil {
 		return date
 	}
-	//t = t.In(time.Local)
-	return t.Local().String()
+	onlyTime := "15:04:05"
+	return t.Local().Format(onlyTime)
 }
 
 func toEther(price string, payment PaymentToken) string {
-	unit := math.Pow(10, float64(payment.Decimals))
+	unit := decimal.New(1, int32(payment.Decimals))
 	d, err := decimal.NewFromString(price)
 	if err != nil {
 		return price
 	}
-	ret := fmt.Sprintf("%s %s", d.Div(decimal.NewFromFloat(unit)).String(), payment.Symbol)
+	ret := fmt.Sprintf("%s %s", d.Div(unit).String(), payment.Symbol)
 	return ret
 }

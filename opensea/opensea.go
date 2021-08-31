@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/bwmarrin/discordgo"
 	"github.com/ethereum/go-ethereum/common"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/xyths/hs"
 	"github.com/xyths/hs/broadcast"
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,13 +15,14 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/zap"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const (
 	collConfig  = "config"
 	collProject = "projects"
-	collEvent   = "events"
+	CollEvent   = "events"
 
 	keyLastUpdateTime = "lastUpdateTime"
 
@@ -36,12 +38,18 @@ type Discord struct {
 	RobotChannels []string `json:"robotChannels"`
 }
 
+type TelegramConf struct {
+	Bot   string // bot username
+	Token string
+}
+
 type Config struct {
 	Mongo    hs.MongoConf
 	Log      hs.LogConf
 	Interval string
 	Discord  Discord
 	Robots   []hs.BroadcastConf
+	Telegram TelegramConf
 }
 
 type OpenSea struct {
@@ -53,6 +61,7 @@ type OpenSea struct {
 
 	discord *discordgo.Session
 	robots  []broadcast.Broadcaster
+	tg      *tgbotapi.BotAPI
 }
 
 func New(cfg Config) *OpenSea {
@@ -90,6 +99,12 @@ func (s *OpenSea) Init(ctx context.Context) error {
 	//for _, conf := range s.cfg.Robots {
 	//	s.robots = append(s.robots, broadcast.New(conf))
 	//}
+	s.tg, err = tgbotapi.NewBotAPI(s.cfg.Telegram.Token)
+	if err != nil {
+		s.Sugar.Errorf("New Telegram bot error: %s", err)
+		return err
+	}
+	s.Sugar.Info("Telegram bot initialized")
 	s.Sugar.Info("OpenSea initialized")
 	return nil
 }
@@ -137,8 +152,22 @@ func (s *OpenSea) doWork(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = s.saveEvent(ctx, events); err != nil {
+	s.Sugar.Infof("events size = %d", len(events))
+	//if err = s.saveEvent(ctx, events); err != nil {
+	//	return err
+	//}
+	if len(events) == 0 {
+		return nil
+	}
+	chats, err := s.getAvailableChats(ctx)
+	if err != nil {
 		return err
+	}
+	s.Sugar.Infof("chats size = %d", len(chats))
+	for _, chat := range chats {
+		if err = s.dispatch(ctx, chat, events); err != nil {
+			s.Sugar.Errorf("dispatch events error: %s", err)
+		}
 	}
 	if err = s.saveLastTime(ctx, now); err != nil {
 		return err
@@ -185,7 +214,7 @@ func (s *OpenSea) saveLastTime(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (s *OpenSea) requestOpenSea(ctx context.Context, from, to time.Time) ([]interface{}, error) {
+func (s *OpenSea) requestOpenSea(ctx context.Context, from, to time.Time) ([]Record, error) {
 	url := fmt.Sprintf("https://api.opensea.io/api/v1/events?only_opensea=false&occurred_after=%d&occurred_before=%d", from.Unix(), to.Unix())
 	client := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -204,7 +233,7 @@ func (s *OpenSea) requestOpenSea(ctx context.Context, from, to time.Time) ([]int
 	}
 	topN := make(map[string]Project)
 	_ = s.loadProjects(ctx, topN)
-	var records []interface{}
+	var records []Record
 	for _, ae := range assetEvent.AssetEvents {
 		if _, ok := topN[common.HexToAddress(ae.Asset.AssetContract.Address).Hex()]; !ok {
 			continue
@@ -218,7 +247,7 @@ func (s *OpenSea) saveEvent(ctx context.Context, records []interface{}) error {
 	if records == nil {
 		return nil
 	}
-	coll := s.db.Collection(collEvent)
+	coll := s.db.Collection(CollEvent)
 	_, err := coll.InsertMany(ctx, records)
 	return err
 }
@@ -245,7 +274,7 @@ func (s *OpenSea) loadProjects(ctx context.Context, projects map[string]Project)
 
 func (s *OpenSea) initIndex(ctx context.Context) error {
 	// list index first
-	coll := s.db.Collection(collEvent)
+	coll := s.db.Collection(CollEvent)
 	indexView := coll.Indexes()
 	cursor, err := indexView.List(ctx, options.ListIndexes().SetMaxTime(time.Second*2))
 	if err != nil {
@@ -271,4 +300,126 @@ func (s *OpenSea) initIndex(ctx context.Context) error {
 	}
 	s.Sugar.Infof("create index %s", name)
 	return nil
+}
+
+func (s *OpenSea) getAvailableChats(ctx context.Context) ([]Configuration, error) {
+	coll := s.db.Collection(CollPreferences)
+	var chats []Configuration
+	cur, err := coll.Find(ctx,
+		bson.D{
+			{"bot", s.cfg.Telegram.Bot},
+		},
+	)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err = cur.All(ctx, &chats); err != nil {
+		return nil, err
+	}
+	return chats, nil
+}
+
+func (s *OpenSea) dispatch(ctx context.Context, chat Configuration, records []Record) error {
+	var filter bool
+	projects := make(map[string]bool)
+	for _, p := range chat.Projects {
+		projects[common.HexToAddress(p.Address).Hex()] = true
+	}
+	if len(projects) > 0 {
+		filter = true
+	}
+	s.Sugar.Infof("filter map: %v", projects)
+	for _, r := range records {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			if filter {
+				if _, ok := projects[r.Contract]; !ok {
+					s.Sugar.Debugf("event contract filtered: %s %s", r.Collection, r.Contract)
+					continue
+				}
+			}
+			content := format(r, chat.Options)
+			//s.Sugar.Infof("will send to %d: %s", chat.ChatId, content)
+			msg := tgbotapi.NewMessage(chat.ChatId, content)
+			if _, err := s.tg.Send(msg); err != nil {
+				s.Sugar.Errorf("send message error: %s", err)
+			}
+			//msg = tgbotapi.NewMessage(chat.ChatId, r.ImagePreviewUrl)
+			////msg.DisableWebPagePreview = true
+			//if _, err := s.tg.Send(msg); err != nil {
+			//	s.Sugar.Errorf("send message error: %s", err)
+			//}
+		}
+	}
+
+	return nil
+}
+
+// format is for Telegram text message.
+func format(record Record, options map[string]bool) string {
+	link := options[OptionLink]
+	//properties := options[telegram.OptionProperties]
+	content := fmt.Sprintf("项目: %s\n名称: %s\nTokenId: %s", record.Collection, record.Name, record.Id)
+	switch record.Event {
+	case EventSale:
+		content += fmt.Sprintf(
+			` 成交(Sale)
+  买家: %s
+  卖家: %s
+  价格: %s`,
+			record.To, record.From, record.Price,
+		)
+	case EventOffer:
+		content += fmt.Sprintf(
+			` 出价(Offer)
+  买家: %s
+  价格: %s`,
+			record.From, record.Price,
+		)
+	case EventBid:
+		content += fmt.Sprintf(
+			` 出价(Bid)
+  买家: %s
+  价格: %s`,
+			record.From, record.Price,
+		)
+	case EventTypeBidCancel:
+		content += fmt.Sprintf(
+			` 撤销出价(Bid Cancel)
+  买家: %s
+  价格: %s`,
+			record.From, record.Price,
+		)
+	case EventTransfer:
+		content += fmt.Sprintf(
+			` 转让(Transfer)
+  发送方: %s
+  接收方: %s`,
+			record.From, record.To,
+		)
+	case EventMint:
+		content += fmt.Sprintf(
+			` 铸造完成 (Mint)
+  接收方: %s`,
+			record.To,
+		)
+	case EventList:
+		content += fmt.Sprintf(
+			` 拍卖(List)
+  卖家: %s
+  价格: %s`,
+			record.From, record.Price,
+		)
+	default:
+	}
+	content += fmt.Sprintf("\n  时间: %s", record.Date)
+	if link {
+		content += fmt.Sprintf("\n地址: https://opensea.io/assets/%s/%s\n预览: \n%s", strings.ToLower(record.Contract), record.Id, record.ImagePreviewUrl)
+	}
+	return content
 }

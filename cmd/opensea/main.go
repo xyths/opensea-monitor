@@ -16,13 +16,13 @@ func init() {
 	app = &cli.App{
 		Name:    filepath.Base(os.Args[0]),
 		Usage:   "OpenSea Monitor",
-		Version: "0.1.0",
+		Version: "0.2.9",
 	}
 
 	app.Commands = []*cli.Command{
 		collectionCommand,
 		eventCommand,
-		//downloadCommand,
+		botCommand,
 		//openseaCommand,
 	}
 	app.Flags = []cli.Flag{

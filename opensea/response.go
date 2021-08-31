@@ -43,6 +43,8 @@ type Asset struct {
 	Name          string          `json:"name"`
 	AssetContract AssetContract   `json:"asset_contract"`
 	Collection    AssetCollection `json:"collection"`
+
+	ImagePreviewUrl string `json:"image_preview_url"`
 }
 
 type AssetContract struct {

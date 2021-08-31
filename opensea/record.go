@@ -4,6 +4,7 @@ import "time"
 
 type Record struct {
 	Collection string `json:"collection"` // collection name
+	Contract   string `json:"contract"`   // collection contract address
 	Name       string `json:"name"`       // NFT name
 	Id         string `json:"id"`
 	Event      string `json:"event"`
@@ -11,6 +12,8 @@ type Record struct {
 	From       string `json:"from"`
 	To         string `json:"to"`
 	Date       string `json:"date"`
+
+	ImagePreviewUrl string `json:"imagePreviewUrl"` // for Telegram preview
 
 	CreatedAt time.Time `json:"createdAt"`
 }

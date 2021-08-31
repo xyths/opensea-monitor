@@ -57,18 +57,18 @@ var (
 	//		ToFlag,
 	//	},
 	//}
-	//openseaCommand = &cli.Command{
-	//	Action: openseaServe,
-	//	Name:   "opensea",
-	//	Usage:  "Monitor OpenSea",
-	//	Subcommands: []*cli.Command{
-	//		{
-	//			Action: download,
-	//			Name:   "opensea",
-	//			Usage:  "Monitor OpenSea",
-	//		},
-	//	},
-	//}
+	botCommand = &cli.Command{
+		Name:  "bot",
+		Usage: "Start bot for OpenSea message dispatch",
+		Subcommands: []*cli.Command{
+			{
+				Action:  telegramBot,
+				Name:    "telegram",
+				Aliases: []string{"tg"},
+				Usage:   "Start a telegram bot",
+			},
+		},
+	}
 )
 
 func updateCollection(c *cli.Context) error {
@@ -135,24 +135,6 @@ func listTopCollection(c *cli.Context) error {
 	return nil
 }
 
-//
-//func openseaServe(c *cli.Context) error {
-//	configFile := c.String(utils.ConfigFlag.Name)
-//	cfg := opensea.Config{}
-//	if err := hs.ParseJsonConfig(configFile, &cfg); err != nil {
-//		return err
-//	}
-//	n := opensea.New(cfg)
-//	if err := n.Init(c.Context); err != nil {
-//		return err
-//	}
-//	defer n.Close(c.Context)
-//	if err := n.Serve(c.Context); err != nil {
-//		return err
-//	}
-//	return nil
-//}
-
 func monitor(c *cli.Context) error {
 	configFile := c.String(ConfigFlag.Name)
 	cfg := opensea.Config{}
@@ -167,5 +149,22 @@ func monitor(c *cli.Context) error {
 	if err := s.Monitor(c.Context); err != nil {
 		return err
 	}
+	return nil
+}
+
+func telegramBot(c *cli.Context) error {
+	//configFile := c.String(ConfigFlag.Name)
+	//cfg := telegram.Config{}
+	//if err := hs.ParseJsonConfig(configFile, &cfg); err != nil {
+	//	return err
+	//}
+	//bot := telegram.New(cfg)
+	//if err := bot.Init(c.Context); err != nil {
+	//	return err
+	//}
+	//defer bot.Close(c.Context)
+	//if err := bot.Serve(c.Context); err != nil {
+	//	return err
+	//}
 	return nil
 }
