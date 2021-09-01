@@ -16,7 +16,7 @@ func init() {
 	app = &cli.App{
 		Name:    filepath.Base(os.Args[0]),
 		Usage:   "OpenSea Monitor",
-		Version: "0.2.9",
+		Version: "0.3.18",
 	}
 
 	app.Commands = []*cli.Command{

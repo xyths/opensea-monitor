@@ -143,35 +143,22 @@ func (s *OpenSea) doWork(ctx context.Context) error {
 		//s.Sugar.Errorf("load last update time error: %s", err)
 		return err
 	}
+	if last != nil {
+		s.Sugar.Infof("load last time: %s", last.String())
+	}
+
 	now := time.Now()
-	if last == nil {
-		yesterday := now.Add(-1 * time.Hour * 24)
-		last = &yesterday
+	maxDelay := time.Minute * 15
+	if last == nil || last.Before(now.Add(-1*maxDelay)) {
+		oldDays := now.Add(-1 * maxDelay)
+		last = &oldDays
 	}
-	events, err := s.requestOpenSea(ctx, *last, now)
-	if err != nil {
-		return err
-	}
-	s.Sugar.Infof("events size = %d", len(events))
-	//if err = s.saveEvent(ctx, events); err != nil {
-	//	return err
-	//}
-	if len(events) == 0 {
-		return nil
-	}
-	chats, err := s.getAvailableChats(ctx)
-	if err != nil {
-		return err
-	}
-	s.Sugar.Infof("chats size = %d", len(chats))
-	for _, chat := range chats {
-		if err = s.dispatch(ctx, chat, events); err != nil {
-			s.Sugar.Errorf("dispatch events error: %s", err)
-		}
-	}
+
+	s.requestOpenSea(ctx, *last, now)
 	if err = s.saveLastTime(ctx, now); err != nil {
-		return err
+		s.Sugar.Errorf("save last time error: %s", err)
 	}
+	s.Sugar.Infof("save last time: %s", now.String())
 	return nil
 }
 
@@ -214,33 +201,97 @@ func (s *OpenSea) saveLastTime(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (s *OpenSea) requestOpenSea(ctx context.Context, from, to time.Time) ([]Record, error) {
-	url := fmt.Sprintf("https://api.opensea.io/api/v1/events?only_opensea=false&occurred_after=%d&occurred_before=%d", from.Unix(), to.Unix())
+func (s *OpenSea) requestOpenSea(ctx context.Context, from, to time.Time) {
+	topN := make(map[string]Project)
+	if err := s.loadProjects(ctx, topN); err != nil {
+		s.Sugar.Errorf("load topN projects error: %s", err)
+	}
+	for addr, _ := range topN {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if err := s.requestOpenSeaProject(ctx, addr, from, to); err != nil {
+				s.Sugar.Errorf("request for single project error: %s", err)
+			}
+		}
+	}
+	return
+}
+func (s *OpenSea) requestOpenSeaProject(ctx context.Context, contract string, from, to time.Time) error {
+	var events []Record
+	offset := 0
+	limit := 300
+	for {
+		result, size, err := s.requestOpenSeaProjectWithOffset(ctx, contract, from, to, offset, limit)
+		if err != nil {
+			s.Sugar.Errorf("request opensea error: %s", err)
+			break
+		}
+		if len(result) > 0 {
+			events = append(events, result...)
+			s.Sugar.Debugf("records outside size = %d", len(events))
+		}
+		if size < limit {
+			break
+		}
+		//s.Sugar.Infof("so many events here: offset = %d, size = %d", offset, size)
+		offset += size
+	}
+
+	s.Sugar.Infof("project %s events size = %d", contract, len(events))
+
+	if len(events) == 0 {
+		return nil
+	}
+	chats, err := s.getAvailableChats(ctx)
+	if err != nil {
+		s.Sugar.Errorf("get available chats error: %s", err)
+		return err
+	}
+	s.Sugar.Infof("chats size = %d", len(chats))
+	for _, chat := range chats {
+		if err = s.dispatch(ctx, chat, events); err != nil {
+			s.Sugar.Errorf("dispatch events error: %s", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *OpenSea) requestOpenSeaProjectWithOffset(ctx context.Context, project string,
+	from, to time.Time, offset, limit int) ([]Record, int, error) {
+	url := fmt.Sprintf(
+		"https://api.opensea.io/api/v1/events?asset_contract_address=%s&only_opensea=false&occurred_after=%d&occurred_before=%d&offset=%d&limit=%d",
+		project, from.Unix(), to.Unix(), offset, limit,
+	)
+	s.Sugar.Infof("request: %s", url)
 	client := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
+
 	var assetEvent ResponseEvent
 	decoder := json.NewDecoder(resp.Body)
 	if err = decoder.Decode(&assetEvent); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	topN := make(map[string]Project)
-	_ = s.loadProjects(ctx, topN)
-	var records []Record
+	if assetEvent.Success == nil {
+		s.Sugar.Debugf("request success")
+	} else if !(*assetEvent.Success) {
+		s.Sugar.Debugf("request failed")
+	}
+	var result []Record
 	for _, ae := range assetEvent.AssetEvents {
-		if _, ok := topN[common.HexToAddress(ae.Asset.AssetContract.Address).Hex()]; !ok {
-			continue
-		}
-		records = append(records, toRecord(ae))
+		result = append(result, toRecord(ae))
 	}
-	return records, nil
+	return result, len(assetEvent.AssetEvents), nil
 }
 
 func (s *OpenSea) saveEvent(ctx context.Context, records []interface{}) error {
@@ -331,30 +382,28 @@ func (s *OpenSea) dispatch(ctx context.Context, chat Configuration, records []Re
 	if len(projects) > 0 {
 		filter = true
 	}
-	s.Sugar.Infof("filter map: %v", projects)
-	for _, r := range records {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			if filter {
-				if _, ok := projects[r.Contract]; !ok {
-					s.Sugar.Debugf("event contract filtered: %s %s", r.Collection, r.Contract)
-					continue
-				}
+	//s.Sugar.Infof("filter map: %v", projects)
+	var count int
+	for i := len(records) - 1; i >= 0; i-- {
+		r := records[i]
+		// send all message even if cancelled context
+		if filter {
+			if _, ok := projects[r.Contract]; !ok {
+				s.Sugar.Debugf("event contract filtered: %s %s", r.Collection, r.Contract)
+				continue
 			}
-			content := format(r, chat.Options)
-			//s.Sugar.Infof("will send to %d: %s", chat.ChatId, content)
-			msg := tgbotapi.NewMessage(chat.ChatId, content)
-			if _, err := s.tg.Send(msg); err != nil {
-				s.Sugar.Errorf("send message error: %s", err)
-			}
-			//msg = tgbotapi.NewMessage(chat.ChatId, r.ImagePreviewUrl)
-			////msg.DisableWebPagePreview = true
-			//if _, err := s.tg.Send(msg); err != nil {
-			//	s.Sugar.Errorf("send message error: %s", err)
-			//}
 		}
+		content := format(r, chat.Options)
+		msg := tgbotapi.NewMessage(chat.ChatId, content)
+		if _, err := s.tg.Send(msg); err != nil {
+			s.Sugar.Errorf("send message error: %s", err)
+		}
+		count++
+		if count == 100 {
+			time.Sleep(time.Second * 10)
+			count = 0
+		}
+		//}
 	}
 
 	return nil
@@ -419,7 +468,7 @@ func format(record Record, options map[string]bool) string {
 	}
 	content += fmt.Sprintf("\n  时间: %s", record.Date)
 	if link {
-		content += fmt.Sprintf("\n地址: https://opensea.io/assets/%s/%s\n预览: \n%s", strings.ToLower(record.Contract), record.Id, record.ImagePreviewUrl)
+		content += fmt.Sprintf("\n地址: https://opensea.io/assets/%s/%s\n预览图片: \n%s", strings.ToLower(record.Contract), record.Id, record.ImagePreviewUrl)
 	}
 	return content
 }

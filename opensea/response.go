@@ -1,6 +1,12 @@
 package opensea
 
+import (
+	"fmt"
+	"github.com/xyths/hs/convert"
+)
+
 type ResponseEvent struct {
+	Success     *bool
 	AssetEvents []AssetEvent `json:"asset_events"`
 }
 
@@ -11,6 +17,7 @@ type AssetEvent struct {
 	// bid_entered: Bid
 	// bid_withdrawn: Bid Cancel
 	// successful: Sale
+	// offer_entered: Offer
 	EventType string `json:"event_type"`
 
 	// used when EventType = `bid_entered` or `offer_entered`, means bid price
@@ -22,9 +29,12 @@ type AssetEvent struct {
 	// used when EventType = `successful` or `bid_withdrawn`, means sale or cancel offer
 	TotalPrice string `json:"total_price"`
 
-	CreatedDate string   `json:"created_date"`
-	FromAccount Account  `json:"from_account"`
-	Owner       *Account `json:"owner"`
+	CreatedDate   string   `json:"created_date"`
+	FromAccount   *Account `json:"from_account"`
+	ToAccount     *Account `json:"to_account"`
+	Owner         *Account `json:"owner"`
+	Seller        *Account `json:"seller"`
+	WinnerAccount *Account `json:"winner_account"`
 
 	PaymentToken PaymentToken `json:"payment_token"`
 }
@@ -61,6 +71,15 @@ type Account struct {
 	ProfileImgUrl string `json:"profile_img_url"`
 	Address       string `json:"address"`
 	Config        string `json:"config"`
+}
+
+func (a Account) String() string {
+	addr := convert.ShortAddress(a.Address)
+	if a.User.Username != "" {
+		return fmt.Sprintf("%s(%s)", a.User.Username, addr)
+	} else {
+		return addr
+	}
 }
 
 type User struct {

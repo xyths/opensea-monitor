@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
-	"github.com/xyths/hs/convert"
 	"time"
 )
 
@@ -14,7 +13,7 @@ func toRecord(ae AssetEvent) Record {
 		Contract:        common.HexToAddress(ae.Asset.AssetContract.Address).Hex(),
 		Name:            ae.Asset.Name,
 		Id:              ae.Asset.TokenId,
-		From:            toName(ae.FromAccount),
+		From:            ae.FromAccount.String(),
 		Date:            toBeijingTime(ae.CreatedDate),
 		CreatedAt:       time.Now(),
 		ImagePreviewUrl: ae.Asset.ImagePreviewUrl,
@@ -39,6 +38,8 @@ func toRecord(ae AssetEvent) Record {
 	case EventTypeSale:
 		r.Event = EventSale
 		r.Price = toEther(ae.TotalPrice, ae.PaymentToken)
+		r.From = ae.Seller.String()
+		r.To = ae.WinnerAccount.String()
 	case EventTypeOffer:
 		r.Event = EventOffer
 		r.Price = toEther(ae.BidAmount, ae.PaymentToken)
@@ -47,15 +48,6 @@ func toRecord(ae AssetEvent) Record {
 	}
 
 	return r
-}
-
-func toName(account Account) string {
-	addr := convert.ShortAddress(account.Address)
-	if account.User.Username != "" {
-		return fmt.Sprintf("%s(%s)", account.User.Username, addr)
-	} else {
-		return addr
-	}
 }
 
 // "2021-08-28T09:44:43.664713"
