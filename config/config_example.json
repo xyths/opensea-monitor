@@ -1,0 +1,31 @@
+{
+  "mongo": {
+    "uri": "mongodb://localhost:27017",
+    "database": "opensea",
+    "maxPoolSize": 50,
+    "minPoolSize": 10,
+    "appName": "opensea-collection"
+  },
+  "log": {
+    "level": "debug",
+    "outputs": [
+      "logs/opensea_output.log"
+    ],
+    "errors": [
+      "logs/opensea_error.log"
+    ]
+  },
+  "interval": "10s",
+  "telegram": {
+    "bot": "bot name",
+    "token": "bot token"
+  },
+  "robots": [
+    {
+      "group": "group name",
+      "name": "robot name",
+      "baseUrl": "robot webhook url",
+      "secret": "robot secret"
+    }
+  ]
+}
